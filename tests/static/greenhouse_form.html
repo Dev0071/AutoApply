@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Apply — Software Engineer at Acme Corp</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #f5f7fa; font-family: -apple-system, BlinkMacSystemFont, sans-serif; }
+    .container { width: 680px; margin: 48px auto 0; background: #fff; padding: 40px; border-radius: 6px; }
+    h1 { font-size: 22px; font-weight: 700; color: #1a1a1a; margin-bottom: 8px; }
+    .company { font-size: 14px; color: #6b7280; margin-bottom: 32px; }
+    .field { margin-bottom: 20px; }
+    label { display: block; font-size: 13px; font-weight: 600; color: #374151; margin-bottom: 6px; }
+    input[type="text"], input[type="email"], input[type="tel"] {
+      display: block; width: 100%; height: 40px; padding: 0 12px;
+      border: 1px solid #d1d5db; border-radius: 4px; font-size: 15px; color: #111;
+    }
+    input:focus { outline: 2px solid #16a34a; border-color: #16a34a; }
+    select {
+      display: block; width: 100%; height: 40px; padding: 0 12px;
+      border: 1px solid #d1d5db; border-radius: 4px; font-size: 15px;
+    }
+    button {
+      width: 100%; height: 44px; background: #16a34a; color: #fff;
+      border: none; border-radius: 4px; font-size: 15px; font-weight: 600;
+      cursor: pointer; margin-top: 8px;
+    }
+    button:hover { background: #15803d; }
+    #success-banner {
+      display: none; padding: 16px; background: #dcfce7; color: #166534;
+      border-radius: 4px; margin-top: 20px; text-align: center; font-weight: 600;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Software Engineer</h1>
+    <p class="company">Acme Corp · San Francisco, CA (Remote OK)</p>
+
+    <form id="application-form">
+      <div class="field">
+        <label for="first_name">First Name <span style="color:red">*</span></label>
+        <input type="text" id="first_name" name="first_name" placeholder="First name" required />
+      </div>
+
+      <div class="field">
+        <label for="last_name">Last Name <span style="color:red">*</span></label>
+        <input type="text" id="last_name" name="last_name" placeholder="Last name" required />
+      </div>
+
+      <div class="field">
+        <label for="email">Email Address <span style="color:red">*</span></label>
+        <input type="email" id="email" name="email" placeholder="email@example.com" required />
+      </div>
+
+      <div class="field">
+        <label for="phone">Phone Number</label>
+        <input type="tel" id="phone" name="phone" placeholder="+1 (555) 000-0000" />
+      </div>
+
+      <div class="field">
+        <label for="location">Current Location</label>
+        <input type="text" id="location" name="location" placeholder="City, State" />
+      </div>
+
+      <button type="submit" id="submit-btn">Submit Application</button>
+    </form>
+
+    <div id="success-banner">Application submitted successfully!</div>
+  </div>
+
+  <script>
+    document.getElementById("application-form").addEventListener("submit", function(e) {
+      e.preventDefault();
+      document.getElementById("success-banner").style.display = "block";
+    });
+  </script>
+</body>
+</html>
