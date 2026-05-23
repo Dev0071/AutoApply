@@ -12,8 +12,7 @@ class Settings(BaseSettings):
     vision_loop_max_steps: int = 30
     vision_loop_wait_ms: int = 800
 
-    class Config:
-        env_file = ".env"
+    model_config = {"env_file": ".env"}
 
 
 settings = Settings()
