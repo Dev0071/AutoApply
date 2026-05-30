@@ -1,6 +1,14 @@
 import type { Metadata } from "next";
+import { Inter } from "next/font/google";
 import "./globals.css";
 import { Providers } from "./providers";
+import { Sidebar } from "@/components/Sidebar";
+
+const inter = Inter({
+  subsets: ["latin"],
+  variable: "--font-inter",
+  display: "swap",
+});
 
 export const metadata: Metadata = {
   title: "AutoApply",
@@ -9,15 +17,15 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
-      <body className="min-h-screen bg-gray-50 text-gray-900 antialiased">
+    <html lang="en" className={inter.variable}>
+      <body className="bg-white text-gray-900 antialiased">
         <Providers>
-          <nav className="bg-white border-b border-gray-200 px-6 py-3 flex items-center gap-6">
-            <span className="font-bold text-lg tracking-tight">AutoApply</span>
-            <a href="/dashboard" className="text-sm text-gray-600 hover:text-gray-900">Dashboard</a>
-            <a href="/profile" className="text-sm text-gray-600 hover:text-gray-900">Profile</a>
-          </nav>
-          <main className="max-w-5xl mx-auto px-4 py-8">{children}</main>
+          <div className="flex h-screen overflow-hidden">
+            <Sidebar />
+            <main className="flex-1 overflow-y-auto bg-white">
+              {children}
+            </main>
+          </div>
         </Providers>
       </body>
     </html>

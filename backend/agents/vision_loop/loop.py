@@ -11,6 +11,7 @@ from playwright.async_api import Page
 from backend.agents.exceptions import AgentError, MaxStepsExceededError
 from backend.agents.vision_loop.execute import execute_action
 from backend.agents.vision_loop.perceive import (
+    PERCEIVE_SYSTEM,
     build_perceive_prompt,
     encode_screenshot,
     parse_action_response,
@@ -83,11 +84,16 @@ class VisionActionLoop:
             # 1. Screenshot (functional)
             png = await page.screenshot(type="png", full_page=False)
 
-            # 2. Perceive — image first, then text prompt
+            # 2. Perceive — system cached, image + variable context per step
             prompt = build_perceive_prompt(task, filled, _summarize_profile(profile))
             response = await self.client.messages.create(
                 model="claude-opus-4-5",
                 max_tokens=512,
+                system=[{
+                    "type": "text",
+                    "text": PERCEIVE_SYSTEM,
+                    "cache_control": {"type": "ephemeral"},
+                }],
                 messages=[{
                     "role": "user",
                     "content": [

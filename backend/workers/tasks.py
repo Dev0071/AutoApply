@@ -71,14 +71,19 @@ async def _execute(run_id: str, job_url: str) -> Dict[str, Any]:
 
         try:
             result_data = await orchestrator.run(job_url, profile_dict, run_id)
-        except FitThresholdError:
+        except FitThresholdError as exc:
             async with SessionLocal() as db:
                 result = await db.execute(
                     select(ApplicationRun).where(ApplicationRun.id == uuid.UUID(run_id))
                 )
                 run = result.scalar_one()
                 run.status = ApplicationStatus.failed
-                run.steps = [{"error": "fit_threshold_not_met", "timestamp": datetime.utcnow().isoformat()}]
+                run.steps = [{
+                    "error": "fit_threshold_not_met",
+                    "fit_score": exc.score,
+                    "threshold": exc.threshold,
+                    "timestamp": datetime.utcnow().isoformat(),
+                }]
                 await db.commit()
             raise
 

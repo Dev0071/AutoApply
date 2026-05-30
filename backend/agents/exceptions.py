@@ -14,4 +14,7 @@ class BrowserError(AgentError):
 
 
 class FitThresholdError(Exception):
-    pass
+    def __init__(self, message: str, score: float = 0.0, threshold: float = 70.0):
+        super().__init__(message)
+        self.score = score
+        self.threshold = threshold

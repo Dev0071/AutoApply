@@ -37,7 +37,9 @@ class Orchestrator:
         threshold = profile.get("fit_threshold", settings.fit_threshold_default)
         if fit_score < threshold:
             raise FitThresholdError(
-                f"Fit score {fit_score} below threshold {threshold}"
+                f"Fit score {fit_score} below threshold {threshold}",
+                score=fit_score,
+                threshold=threshold,
             )
 
         log.info("fit_passed", score=fit_score, threshold=threshold, job=jd.title)
