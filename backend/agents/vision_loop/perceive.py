@@ -2,26 +2,21 @@ from __future__ import annotations
 import base64
 import json
 
-PERCEIVE_PROMPT_TEMPLATE = """
-You are controlling a browser to complete a job application.
-Look at this screenshot carefully. Viewport is 1280x800 pixels.
-
-Current task: {task}
-Fields already filled: {filled_fields}
-Candidate profile: {profile_summary}
-
-Identify the NEXT single action to take. Reply ONLY with JSON:
-{{
-  "action": "click" | "type" | "select" | "scroll" | "done" | "error",
-  "x": <pixel x — center of element>,
-  "y": <pixel y — center of element>,
-  "value": "<text to type or option label to select>",
-  "field_name": "<human-readable field name>",
-  "reasoning": "<one sentence>",
-  "confidence": 0.0-1.0,
-  "done": false
-}}
-"""
+PERCEIVE_SYSTEM = (
+    "You are controlling a browser to complete a job application. "
+    "Look at each screenshot carefully. Viewport is 1280x800 pixels.\n\n"
+    "Identify the NEXT single action to take. Reply ONLY with JSON:\n"
+    "{\n"
+    '  "action": "click" | "type" | "select" | "scroll" | "done" | "error",\n'
+    '  "x": <pixel x — center of element>,\n'
+    '  "y": <pixel y — center of element>,\n'
+    '  "value": "<text to type or option label to select>",\n'
+    '  "field_name": "<human-readable field name>",\n'
+    '  "reasoning": "<one sentence>",\n'
+    '  "confidence": 0.0-1.0,\n'
+    '  "done": false\n'
+    "}"
+)
 
 
 def build_perceive_prompt(
@@ -29,10 +24,10 @@ def build_perceive_prompt(
     filled_fields: list[str],
     profile_summary: str,
 ) -> str:
-    return PERCEIVE_PROMPT_TEMPLATE.format(
-        task=task,
-        filled_fields=filled_fields,
-        profile_summary=profile_summary,
+    return (
+        f"Current task: {task}\n"
+        f"Fields already filled: {filled_fields}\n"
+        f"Candidate profile: {profile_summary}"
     )
 
 

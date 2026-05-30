@@ -1,16 +1,28 @@
-const COLORS: Record<string, string> = {
-  pending: "bg-gray-100 text-gray-700",
-  queued: "bg-blue-100 text-blue-700",
-  running: "bg-yellow-100 text-yellow-800",
-  review: "bg-purple-100 text-purple-800",
-  submitted: "bg-green-100 text-green-700",
-  failed: "bg-red-100 text-red-700",
+import { cn } from "@/lib/utils";
+
+const STATUS_CONFIG: Record<string, { dot: string; label: string; text: string }> = {
+  pending:   { dot: "bg-gray-400",              label: "Pending",   text: "text-gray-500"   },
+  queued:    { dot: "bg-blue-500",              label: "Queued",    text: "text-blue-600"   },
+  running:   { dot: "bg-amber-500 animate-pulse", label: "Running", text: "text-amber-600"  },
+  review:    { dot: "bg-violet-500",            label: "Review",    text: "text-violet-600" },
+  submitted: { dot: "bg-emerald-500",           label: "Submitted", text: "text-emerald-600"},
+  failed:    { dot: "bg-red-500",               label: "Failed",    text: "text-red-600"    },
 };
 
-export function StatusBadge({ status }: { status: string }) {
+interface StatusBadgeProps {
+  status: string;
+  showDot?: boolean;
+  className?: string;
+}
+
+export function StatusBadge({ status, showDot = true, className }: StatusBadgeProps) {
+  const cfg = STATUS_CONFIG[status] ?? STATUS_CONFIG.pending;
   return (
-    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${COLORS[status] ?? "bg-gray-100 text-gray-600"}`}>
-      {status}
+    <span className={cn("inline-flex items-center gap-1.5 text-xs font-medium", cfg.text, className)}>
+      {showDot && (
+        <span className={cn("inline-block h-1.5 w-1.5 rounded-full shrink-0", cfg.dot)} />
+      )}
+      {cfg.label}
     </span>
   );
 }

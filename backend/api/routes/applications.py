@@ -36,6 +36,7 @@ async def trigger_application(
         url=body.job_url,
     )
     db.add(job)
+    await db.flush()  # ensure job row exists in DB before run references it via FK
 
     run = ApplicationRun(
         id=uuid.uuid4(),

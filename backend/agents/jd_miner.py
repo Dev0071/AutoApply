@@ -21,17 +21,16 @@ _ATS_PATTERNS: list[tuple[str, str]] = [
     (r"icims\.com", "icims"),
 ]
 
-_EXTRACT_PROMPT = (
-    "Extract structured information from this job description.\n\n"
+_EXTRACT_SYSTEM = (
+    "Extract structured information from job descriptions.\n\n"
     "Reply with ONLY a JSON object — no preamble, no markdown fences:\n"
-    '{{\n'
+    '{\n'
     '  "title": "<job title or null>",\n'
     '  "company": "<company name or null>",\n'
     '  "keywords": ["<skill or technology>", ...]\n'
-    "}}\n\n"
+    "}\n\n"
     "Include technical skills, tools, languages, and frameworks in keywords.\n"
-    "Limit keywords to 30 items max.\n\n"
-    "Job description:\n{jd_text}"
+    "Limit keywords to 30 items max."
 )
 
 
@@ -79,10 +78,21 @@ class JDMiner:
         async with httpx.AsyncClient(timeout=self._timeout, follow_redirects=True) as client:
             response = await client.get(
                 url,
-                headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"},
+                headers={
+                    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                    "Accept-Language": "en-US,en;q=0.5",
+                },
             )
             response.raise_for_status()
-        return self._clean_html(response.text)
+        text = self._clean_html(response.text)
+        if len(text.strip()) < 200:
+            raise ValueError(
+                f"Job page returned too little text ({len(text.strip())} chars). "
+                "The page likely requires JavaScript — try a direct ATS link "
+                "(e.g. boards.greenhouse.io/… or jobs.lever.co/…) rather than a company careers page."
+            )
+        return text
 
     def _clean_html(self, html: str) -> str:
         soup = BeautifulSoup(html, "html.parser")
@@ -96,15 +106,21 @@ class JDMiner:
         response = await self._client.messages.create(
             model="claude-sonnet-4-6",
             max_tokens=512,
+            system=[{
+                "type": "text",
+                "text": _EXTRACT_SYSTEM,
+                "cache_control": {"type": "ephemeral"},
+            }],
             messages=[{
                 "role": "user",
-                "content": _EXTRACT_PROMPT.format(jd_text=truncated),
+                "content": f"Job description:\n{truncated}",
             }],
         )
         raw = _strip_code_fences(response.content[0].text)
         try:
             return json.loads(raw)
-        except json.JSONDecodeError as exc:
-            raise ValueError(
-                f"Failed to parse JD extraction response: {exc} | Raw: {raw}"
-            ) from exc
+        except json.JSONDecodeError:
+            log.warning("jd_extraction_non_json", raw_preview=raw[:200])
+            # Claude returned a conversational reply instead of JSON — page content was
+            # probably too thin. Return empty structure; fit scorer will score 0.
+            return {"title": None, "company": None, "keywords": []}
