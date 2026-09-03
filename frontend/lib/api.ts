@@ -10,6 +10,14 @@ export interface ApplicationListItem {
   created_at: string;
 }
 
+export interface StepUsage {
+  model?: string;
+  stage?: string;
+  input_tokens?: number;
+  output_tokens?: number;
+  cost_usd?: number;
+}
+
 export interface StepLog {
   step_number?: number;
   action?: string;
@@ -21,8 +29,13 @@ export interface StepLog {
   confidence?: number;
   screenshot_url?: string;
   success?: boolean;
+  verified?: boolean | null;
+  tier?: string;
+  needs_user_input?: boolean;
+  usage?: StepUsage;
   timestamp?: string;
   error?: string;
+  warning?: string;
 }
 
 export interface ApplicationDetail {
@@ -32,6 +45,7 @@ export interface ApplicationDetail {
   steps: StepLog[];
   cover_letter: string | null;
   bullets: string[];
+  total_cost_usd: number | null;
   created_at: string;
   submitted_at: string | null;
 }

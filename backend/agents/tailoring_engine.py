@@ -1,50 +1,48 @@
 from __future__ import annotations
 
 import json
-import re
 
 import anthropic
 import structlog
 
 from backend.agents.schemas import JDResult, TailoringResult
+from backend.agents.usage import UsageTracker
+from backend.config import settings
 
 log = structlog.get_logger()
 
-_COVER_LETTER_SYSTEM = (
-    "You are an expert career coach who writes tailored, concise cover letters. "
-    "Mirror the job description's language naturally. "
-    "Do not invent experience not in the candidate profile. "
-    "Output plain text only — no markdown, no headers."
+_TAILORING_SYSTEM = (
+    "You are an expert career coach and resume writer.\n"
+    "Given a candidate profile and a role, produce BOTH:\n"
+    "1. cover_letter — a tailored, concise 3-paragraph cover letter in plain text "
+    "(no markdown, no headers) that mirrors the job description's language naturally.\n"
+    "2. bullets — the candidate's experience bullets rewritten to mirror the job's "
+    "language.\n"
+    "Never invent experience not in the candidate profile."
 )
 
-_COVER_LETTER_USER = (
-    "Write a 3-paragraph cover letter for this role.\n\n"
+_TAILORING_USER = (
     "Candidate profile:\n{profile_text}\n\n"
     "Role:\n"
     "Title: {title}\n"
     "Company: {company}\n"
-    "Key requirements: {keywords}"
-)
-
-_BULLETS_SYSTEM = (
-    "You are an expert resume writer. "
-    "Rewrite experience bullets to mirror the job description's language. "
-    "Output ONLY a JSON array of strings — no preamble, no markdown fences."
-)
-
-_BULLETS_USER = (
-    "Rewrite these resume bullets to match this job's language.\n\n"
-    "JD keywords: {keywords}\n\n"
+    "Key requirements: {keywords}\n\n"
     "Original bullets:\n{bullets}"
 )
+
+_TAILORING_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "cover_letter": {"type": "string"},
+        "bullets": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["cover_letter", "bullets"],
+    "additionalProperties": False,
+}
 
 
 class TailoringError(Exception):
     pass
-
-
-def _strip_code_fences(text: str) -> str:
-    return re.sub(r"^```(?:json)?\s*|\s*```$", "", text.strip(), flags=re.MULTILINE)
 
 
 def _format_profile(profile: dict) -> str:
@@ -84,90 +82,58 @@ def _jd_field(jd: dict | JDResult, field: str) -> str:
 
 
 class TailoringEngine:
-    def __init__(self, anthropic_client: anthropic.AsyncAnthropic):
+    def __init__(
+        self,
+        anthropic_client: anthropic.AsyncAnthropic,
+        tracker: UsageTracker | None = None,
+    ):
         self.client = anthropic_client
+        self.tracker = tracker if tracker is not None else UsageTracker()
 
-    async def generate_cover_letter(
+    async def generate_tailoring(
         self, profile: dict, jd: dict | JDResult
     ) -> TailoringResult:
-        profile_text = _format_profile(profile)
-        prompt = _COVER_LETTER_USER.format(
-            profile_text=profile_text,
+        """One call produces both the cover letter and the rewritten bullets —
+        the profile and JD context are sent once instead of twice."""
+        prompt = _TAILORING_USER.format(
+            profile_text=_format_profile(profile),
             title=_jd_field(jd, "title"),
             company=_jd_field(jd, "company"),
             keywords=_jd_keywords(jd),
+            bullets=_extract_bullets(profile) or "(no bullets provided)",
         )
 
         response = await self.client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=1024,
-            system=[
-                {
-                    "type": "text",
-                    "text": _COVER_LETTER_SYSTEM,
-                    "cache_control": {"type": "ephemeral"},
-                }
-            ],
-            messages=[{
-                "role": "user",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": f"Candidate profile:\n{profile_text}",
-                        "cache_control": {"type": "ephemeral"},
-                    },
-                    {"type": "text", "text": prompt},
-                ],
-            }],
+            model=settings.tailoring_model,
+            max_tokens=2048,
+            system=_TAILORING_SYSTEM,
+            output_config={
+                "format": {"type": "json_schema", "schema": _TAILORING_SCHEMA}
+            },
+            messages=[{"role": "user", "content": prompt}],
         )
+        self.tracker.add(settings.tailoring_model, response, stage="tailoring")
 
-        log.info("cover_letter_generated", company=_jd_field(jd, "company"))
-        return TailoringResult(cover_letter=response.content[0].text, bullets=[])
-
-    async def rewrite_bullets(
-        self, profile: dict, jd: dict | JDResult
-    ) -> TailoringResult:
-        original_bullets = _extract_bullets(profile)
-        prompt = _BULLETS_USER.format(
-            keywords=_jd_keywords(jd),
-            bullets=original_bullets or "(no bullets provided)",
-        )
-
-        response = await self.client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=1024,
-            system=[
-                {
-                    "type": "text",
-                    "text": _BULLETS_SYSTEM,
-                    "cache_control": {"type": "ephemeral"},
-                }
-            ],
-            messages=[{
-                "role": "user",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": f"Original bullets:\n{original_bullets}",
-                        "cache_control": {"type": "ephemeral"},
-                    },
-                    {"type": "text", "text": prompt},
-                ],
-            }],
-        )
-
-        raw = _strip_code_fences(response.content[0].text)
+        raw = next((b.text for b in response.content if getattr(b, "type", "text") == "text"), None)
+        if raw is None:
+            raw = response.content[0].text
         try:
             parsed = json.loads(raw)
         except json.JSONDecodeError as exc:
             raise TailoringError(
-                f"Failed to parse rewritten bullets: {exc} | Raw: {raw}"
+                f"Failed to parse tailoring response: {exc} | Raw: {raw[:200]}"
             ) from exc
 
-        if not isinstance(parsed, list):
-            raise TailoringError(
-                f"Expected a JSON array of bullets, got: {type(parsed).__name__}"
-            )
+        if not isinstance(parsed.get("cover_letter"), str) or not isinstance(
+            parsed.get("bullets"), list
+        ):
+            raise TailoringError(f"Tailoring response missing fields: {list(parsed)}")
 
-        log.info("bullets_rewritten", count=len(parsed), company=_jd_field(jd, "company"))
-        return TailoringResult(cover_letter="", bullets=parsed)
+        log.info(
+            "tailoring_generated",
+            company=_jd_field(jd, "company"),
+            bullet_count=len(parsed["bullets"]),
+        )
+        return TailoringResult(
+            cover_letter=parsed["cover_letter"], bullets=parsed["bullets"]
+        )

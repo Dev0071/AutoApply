@@ -1,4 +1,8 @@
+# Env files: only .env.example is committed
 .env
+.env.*
+!.env.example
+
 __pycache__/
 *.pyc
 *.pyo
@@ -12,3 +16,6 @@ build/
 node_modules/
 .next/
 *.log
+
+# TypeScript incremental build cache
+frontend/tsconfig.tsbuildinfo

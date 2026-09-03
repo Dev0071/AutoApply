@@ -14,3 +14,11 @@ async def get_db() -> AsyncSession:
 
 async def get_anthropic() -> anthropic.AsyncAnthropic:
     return anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+
+
+async def get_cache():
+    """Redis client for JD dedupe. Cache reads/writes are best-effort in the
+    miner, so a Redis outage degrades to re-mining rather than failing."""
+    from backend.services.cache import CacheService
+
+    return CacheService()

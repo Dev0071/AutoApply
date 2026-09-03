@@ -1,5 +1,6 @@
 VENV = .venv/bin
-DB_URL = postgresql://buglens:buglens_dev_password@localhost:5432/autoapply
+DB_URL = postgresql+asyncpg://buglens:buglens_dev_password@localhost:5432/autoapply
+# postgresql+asyncpg://user:password@localhost:5432/autoapply
 
 # ── Infrastructure ────────────────────────────────────────────────────────────
 
@@ -43,14 +44,25 @@ ui:                           ## Run Next.js dev server on :3000
 ui-install:                   ## Install frontend dependencies
 	cd frontend && npm install
 
+# ── Ops ───────────────────────────────────────────────────────────────────────
+
+s3-lifecycle:                 ## Apply screenshot retention policy to the S3 bucket
+	$(VENV)/python -c "from backend.services.storage import StorageService; StorageService().apply_lifecycle_policy()"
+
 # ── Tests ─────────────────────────────────────────────────────────────────────
 
-test:                         ## Run all unit tests
-	$(VENV)/python -m pytest --ignore=tests/agents/test_vision_loop_integration.py -v
+test:                         ## Run all unit tests (no browser, no network)
+	$(VENV)/python -m pytest -m "not integration" -v
+
+test-integration:             ## Run integration tests (real headless browser, scripted Claude)
+	$(VENV)/python -m pytest -m integration -v
+
+test-all:                     ## Run unit + integration
+	$(VENV)/python -m pytest -v
 
 # ── Help ──────────────────────────────────────────────────────────────────────
 
 help:
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' Makefile | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2}'
 
-.PHONY: infra infra-stop migrate migrate-down db-reset db api worker ui ui-install test help
+.PHONY: infra infra-stop migrate migrate-down db-reset db api worker ui ui-install s3-lifecycle test test-integration test-all help

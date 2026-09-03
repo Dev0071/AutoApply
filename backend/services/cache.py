@@ -19,3 +19,11 @@ class CacheService:
 
     async def delete(self, key: str) -> None:
         await self._redis.delete(key)
+
+    async def incr(self, key: str, ttl: int = 86_400) -> int:
+        """Atomically increment a counter, setting its TTL on first increment.
+        Used for per-user, per-platform daily rate limiting."""
+        count = await self._redis.incr(key)
+        if count == 1:
+            await self._redis.expire(key, ttl)
+        return count

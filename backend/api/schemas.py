@@ -77,6 +77,7 @@ class ApplicationStatusResponse(BaseModel):
     steps: list[dict]
     cover_letter: str | None
     bullets: list[str]
+    total_cost_usd: float | None = None
     created_at: str
     submitted_at: str | None
 

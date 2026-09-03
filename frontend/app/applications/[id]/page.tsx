@@ -144,6 +144,10 @@ export default function ApplicationDetailPage() {
     app.steps?.length > 0 &&
     (app.steps[0] as Record<string, unknown>).error === "fit_threshold_not_met";
 
+  const isJDFailed = app.status === "failed" &&
+    app.steps?.length > 0 &&
+    (app.steps[0] as Record<string, unknown>).error === "jd_fetch_failed";
+
   const defaultTab = app.status === "running" || app.status === "queued" ? "replay" : "review";
 
   return (
@@ -247,6 +251,19 @@ export default function ApplicationDetailPage() {
           </div>
         )}
 
+        {/* JD fetch failed banner */}
+        {isJDFailed && (
+          <div className="mt-4 flex items-start gap-2.5 rounded-lg bg-amber-50 border border-amber-200 px-3 py-2.5">
+            <AlertTriangle className="h-4 w-4 text-amber-500 shrink-0 mt-0.5" />
+            <div className="text-xs">
+              <p className="font-medium text-amber-800 mb-1">Could not fetch job page</p>
+              <p className="text-amber-700 leading-relaxed">
+                {String((app.steps[0] as Record<string, unknown>).message ?? "The job URL could not be fetched.")}
+              </p>
+            </div>
+          </div>
+        )}
+
         {submit.isError && (
           <p className="mt-2 text-xs text-red-500">{(submit.error as Error).message}</p>
         )}
@@ -336,7 +353,7 @@ export default function ApplicationDetailPage() {
 
           {/* Replay tab */}
           <TabsContent value="replay" className="px-6 py-5">
-            <StepReplay steps={app.steps ?? []} />
+            <StepReplay steps={app.steps ?? []} totalCostUsd={app.total_cost_usd} />
           </TabsContent>
 
           {/* Cover letter tab */}

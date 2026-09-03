@@ -10,7 +10,11 @@ export interface MockStep {
   timestamp: string;
   screenshot_url?: string;
   success: boolean;
+  verified?: boolean | null;
+  tier?: string;
+  needs_user_input?: boolean;
   error?: string;
+  warning?: string;
 }
 
 export interface RiskFlag {
@@ -37,6 +41,7 @@ export interface MockApp {
   bullets: string[];
   risk_flags: RiskFlag[];
   steps: MockStep[];
+  total_cost_usd?: number | null;
 }
 
 const now = new Date();

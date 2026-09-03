@@ -7,7 +7,8 @@ from anthropic import AsyncAnthropic
 from backend.agents.fit_scorer import score_fit
 from backend.agents.jd_miner import JDMiner
 from backend.agents.tailoring_engine import TailoringEngine, TailoringError
-from backend.api.dependencies import get_anthropic
+from backend.agents.exceptions import JDFetchError
+from backend.api.dependencies import get_anthropic, get_cache
 from backend.api.schemas import JobAnalyzeRequest, JobAnalyzeResponse
 
 log = structlog.get_logger()
@@ -18,6 +19,7 @@ router = APIRouter(prefix="/jobs", tags=["jobs"])
 async def analyze_job(
     body: JobAnalyzeRequest,
     client: AsyncAnthropic = Depends(get_anthropic),
+    cache=Depends(get_cache),
 ) -> JobAnalyzeResponse:
     """
     Stateless endpoint — fetches and analyzes a job URL.
@@ -27,9 +29,13 @@ async def analyze_job(
     profile_dict = body.profile.model_dump()
 
     try:
-        jd = await JDMiner(client).fetch(body.url)
+        jd = await JDMiner(client, cache=cache).fetch(body.url)
+    except JDFetchError as exc:
+        # Expected, user-actionable outcome — the message names the fix
+        log.info("jd_fetch_failed", url=body.url, error=str(exc))
+        raise HTTPException(status_code=422, detail=str(exc))
     except Exception as exc:
-        log.error("jd_fetch_failed", url=body.url, error=str(exc))
+        log.error("jd_analyze_failed", url=body.url, error=str(exc))
         raise HTTPException(status_code=422, detail=f"Failed to fetch job page: {exc}")
 
     fit_score = score_fit(profile_dict, jd.model_dump())
@@ -40,11 +46,9 @@ async def analyze_job(
 
     if passes:
         try:
-            engine = TailoringEngine(client)
-            cl_result = await engine.generate_cover_letter(profile_dict, jd)
-            b_result = await engine.rewrite_bullets(profile_dict, jd)
-            cover_letter = cl_result.cover_letter
-            bullets = b_result.bullets
+            result = await TailoringEngine(client).generate_tailoring(profile_dict, jd)
+            cover_letter = result.cover_letter
+            bullets = result.bullets
         except TailoringError as exc:
             log.warning("tailoring_failed", error=str(exc))
 

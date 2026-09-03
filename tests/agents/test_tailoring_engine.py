@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 from backend.agents.tailoring_engine import TailoringEngine, TailoringError
 from backend.agents.schemas import TailoringResult
+from backend.agents.usage import UsageTracker
 
 _PROFILE = {
     "name": "John Gacheru",
@@ -23,6 +24,14 @@ _JD = {
     "keywords": ["python", "fastapi", "postgresql"],
 }
 
+_TAILORING_JSON = json.dumps({
+    "cover_letter": "Dear Hiring Manager,\n\nI am excited...",
+    "bullets": [
+        "Architected FastAPI services handling 10M+ daily requests",
+        "Led async migration reducing p99 latency by 40%",
+    ],
+})
+
 
 def _make_client(response_text: str) -> MagicMock:
     content_block = MagicMock()
@@ -34,95 +43,76 @@ def _make_client(response_text: str) -> MagicMock:
     return client
 
 
-# ---------------------------------------------------------------------------
-# generate_cover_letter
-# ---------------------------------------------------------------------------
-
 @pytest.mark.asyncio
-async def test_generate_cover_letter_returns_tailoring_result():
-    client = _make_client("Dear Hiring Manager,\n\nI am excited...")
-    engine = TailoringEngine(client)
-    result = await engine.generate_cover_letter(_PROFILE, _JD)
+async def test_generate_tailoring_returns_both_outputs():
+    engine = TailoringEngine(_make_client(_TAILORING_JSON))
+    result = await engine.generate_tailoring(_PROFILE, _JD)
 
     assert isinstance(result, TailoringResult)
-    assert len(result.cover_letter) > 0
-    assert result.bullets == []
-
-
-@pytest.mark.asyncio
-async def test_generate_cover_letter_passes_profile_and_jd_to_claude():
-    client = _make_client("cover letter text")
-    engine = TailoringEngine(client)
-    await engine.generate_cover_letter(_PROFILE, _JD)
-
-    call_kwargs = client.messages.create.call_args.kwargs
-    content = call_kwargs["messages"][0]["content"]
-    combined = " ".join(
-        block["text"] for block in content if block.get("type") == "text"
-    )
-    assert "John Gacheru" in combined
-    assert "Acme Corp" in combined
-
-
-@pytest.mark.asyncio
-async def test_generate_cover_letter_missing_profile_fields():
-    client = _make_client("cover letter text")
-    engine = TailoringEngine(client)
-    # Should not raise — missing fields default gracefully
-    result = await engine.generate_cover_letter({}, _JD)
-    assert isinstance(result, TailoringResult)
-
-
-# ---------------------------------------------------------------------------
-# rewrite_bullets
-# ---------------------------------------------------------------------------
-
-_BULLETS_JSON = json.dumps([
-    "Architected FastAPI services handling 10M+ daily requests",
-    "Led async migration reducing p99 latency by 40%",
-])
-
-
-@pytest.mark.asyncio
-async def test_rewrite_bullets_returns_tailoring_result():
-    client = _make_client(_BULLETS_JSON)
-    engine = TailoringEngine(client)
-    result = await engine.rewrite_bullets(_PROFILE, _JD)
-
-    assert isinstance(result, TailoringResult)
-    assert len(result.bullets) == 2
-    assert result.cover_letter == ""
-
-
-@pytest.mark.asyncio
-async def test_rewrite_bullets_handles_code_block_wrapping():
-    """Claude sometimes wraps JSON arrays in ```json ... ```."""
-    wrapped = f"```json\n{_BULLETS_JSON}\n```"
-    client = _make_client(wrapped)
-    engine = TailoringEngine(client)
-    result = await engine.rewrite_bullets(_PROFILE, _JD)
+    assert result.cover_letter.startswith("Dear Hiring Manager")
     assert len(result.bullets) == 2
 
 
 @pytest.mark.asyncio
-async def test_rewrite_bullets_raises_tailoring_error_on_bad_json():
-    client = _make_client("Sorry, I cannot do that.")
+async def test_generate_tailoring_is_a_single_call():
+    """Cover letter + bullets in one request — profile and JD sent once."""
+    client = _make_client(_TAILORING_JSON)
     engine = TailoringEngine(client)
-    with pytest.raises(TailoringError, match="Failed to parse rewritten bullets"):
-        await engine.rewrite_bullets(_PROFILE, _JD)
+    await engine.generate_tailoring(_PROFILE, _JD)
+
+    assert client.messages.create.await_count == 1
 
 
 @pytest.mark.asyncio
-async def test_rewrite_bullets_raises_tailoring_error_when_not_list():
-    client = _make_client('{"bullet": "single item"}')
+async def test_generate_tailoring_passes_profile_and_jd():
+    client = _make_client(_TAILORING_JSON)
     engine = TailoringEngine(client)
-    with pytest.raises(TailoringError, match="Expected a JSON array"):
-        await engine.rewrite_bullets(_PROFILE, _JD)
+    await engine.generate_tailoring(_PROFILE, _JD)
+
+    prompt = client.messages.create.call_args.kwargs["messages"][0]["content"]
+    assert "John Gacheru" in prompt
+    assert "Acme Corp" in prompt
+    assert "Built REST APIs serving 10M requests/day" in prompt
 
 
 @pytest.mark.asyncio
-async def test_rewrite_bullets_empty_experience():
-    client = _make_client(_BULLETS_JSON)
+async def test_generate_tailoring_uses_structured_output():
+    client = _make_client(_TAILORING_JSON)
     engine = TailoringEngine(client)
-    result = await engine.rewrite_bullets({"experience": {}}, _JD)
+    await engine.generate_tailoring(_PROFILE, _JD)
+
+    output_config = client.messages.create.call_args.kwargs["output_config"]
+    assert output_config["format"]["type"] == "json_schema"
+    schema_props = output_config["format"]["schema"]["properties"]
+    assert set(schema_props) == {"cover_letter", "bullets"}
+
+
+@pytest.mark.asyncio
+async def test_generate_tailoring_records_usage():
+    tracker = UsageTracker()
+    engine = TailoringEngine(_make_client(_TAILORING_JSON), tracker=tracker)
+    await engine.generate_tailoring(_PROFILE, _JD)
+
+    assert len(tracker.entries) == 1
+    assert tracker.entries[0]["stage"] == "tailoring"
+
+
+@pytest.mark.asyncio
+async def test_generate_tailoring_missing_profile_fields():
+    engine = TailoringEngine(_make_client(_TAILORING_JSON))
+    result = await engine.generate_tailoring({}, _JD)
     assert isinstance(result, TailoringResult)
+
+
+@pytest.mark.asyncio
+async def test_generate_tailoring_raises_on_bad_json():
+    engine = TailoringEngine(_make_client("Sorry, I cannot do that."))
+    with pytest.raises(TailoringError, match="Failed to parse tailoring response"):
+        await engine.generate_tailoring(_PROFILE, _JD)
+
+
+@pytest.mark.asyncio
+async def test_generate_tailoring_raises_on_missing_fields():
+    engine = TailoringEngine(_make_client('{"cover_letter": "hi"}'))
+    with pytest.raises(TailoringError, match="missing fields"):
+        await engine.generate_tailoring(_PROFILE, _JD)

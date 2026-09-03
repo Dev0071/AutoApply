@@ -185,16 +185,22 @@ autoapply/
 │   │   │   └── profile.py        # User profile CRUD
 │   │   └── main.py               # FastAPI app, lifespan
 │   ├── agents/
-│   │   ├── orchestrator.py       # OOP — coordinates all sub-agents
-│   │   ├── jd_miner.py           # OOP — fetch + extract JD text
+│   │   ├── orchestrator.py       # OOP — coordinates sub-agents + tier routing
+│   │   ├── jd_miner.py           # OOP — fetch + extract JD text (Redis-deduped)
 │   │   ├── fit_scorer.py         # Functional — profile vs JD scoring
-│   │   ├── tailoring_engine.py   # OOP — Claude API cover letter + bullets
-│   │   └── vision_loop/
-│   │       ├── loop.py           # OOP — main run_vision_loop()
+│   │   ├── tailoring_engine.py   # OOP — one call → cover letter + bullets
+│   │   ├── usage.py              # Token accounting + cost estimation
+│   │   ├── dom_fill/             # Tiers 1–2 — the cheap path
+│   │   │   ├── greenhouse.py     # Functional — ATS question-schema prefetch
+│   │   │   ├── serialize.py      # Functional — live DOM → field list
+│   │   │   ├── mapper.py         # Functional — fields + profile → answers
+│   │   │   └── executor.py       # Functional — deterministic fill + verify
+│   │   └── vision_loop/          # Tier 3 — fallback
+│   │       ├── loop.py           # OOP — batched perceive/act rounds
 │   │       ├── screenshot.py     # Functional — capture + encode
-│   │       ├── perceive.py       # Functional — build Claude prompt + parse response
+│   │       ├── perceive.py       # Functional — build prompt + parse batch response
 │   │       ├── execute.py        # Functional — translate action JSON → Playwright
-│   │       └── verify.py         # Functional — success/stuck/error detection
+│   │       └── verify.py         # Functional — tri-state DOM verification
 │   ├── db/
 │   │   ├── models.py             # SQLAlchemy models (all with user_id)
 │   │   ├── migrations/           # Alembic migrations
@@ -230,21 +236,33 @@ autoapply/
 
 ## Architecture Philosophy
 
-### Critical Design Principle: Vision-First, Selector-Never
+### Critical Design Principle: Runtime-Read, Never Hardcoded
 
-**NEVER hardcode CSS selectors or XPath for form interaction.**
+**NEVER hardcode CSS selectors, XPath, or per-ATS field maps.**
 
-The agent has two layers:
+The failure mode that kills competitors is a *static map* of field selectors shipped with the product — it breaks the day Workday changes its HTML. Reading the **live** page at runtime does not have that failure mode, whether you read it as pixels or as DOM. Both adapt because both look at what is actually there.
 
-1. **Layer 1 (Vision — 100% of navigation):** Claude sees the page screenshot and decides what to click. No DOM inspection for interaction decisions.
-2. **Layer 2 (DOM assist — verification only):** After acting, optionally query DOM to confirm a field value was accepted.
+The agent therefore has three tiers, cheapest first:
+
+1. **Tier 1 — Known schema (Greenhouse/Lever/Ashby):** fetch the posting's authoritative question list from the ATS's public API before opening a browser. Planning data only; submission always goes through the real form.
+2. **Tier 2 — DOM-serialized fill (default):** serialize the live form's fields at runtime (labels, types, options — via generic element queries, never a stored map), map every field to an answer in one cheap model call, fill deterministically, verify each value by readback.
+3. **Tier 3 — Vision loop (fallback):** screenshot → perceive → act, for canvas widgets, obfuscated DOM, or any page where Tier 2 fails verification. This is the moat for hard pages, not the toll on every page.
 
 ```
-Screenshot (what Claude sees) → Action decision → Playwright execution
-DOM / selectors ← ONLY for post-action verification, never for targeting
+Tier 1 schema (if known ATS) ─┐
+                              ├→ Tier 2 DOM fill → verify → done
+Live DOM serialization ───────┘        │ fails
+                                       ▼
+                              Tier 3 vision loop → verify → done
 ```
 
-**Why:** Every competitor breaks when ATS providers update their HTML. Vision-based agents are immune to DOM changes. The page can completely restructure and the agent still works because it's reading pixels, not selectors.
+**Why not vision for everything:** a 1280×800 screenshot costs ~1,365 input tokens *per perceive call*. Serializing the same form as text costs ~800–1,500 tokens **once**. Vision is the right tool when pixels carry information the DOM doesn't — which is the exception, not the rule.
+
+**What never changes:** the fit gate, per-JD tailoring, the full screenshot audit trail (every action still screenshots to S3 regardless of tier), and the human review gate. Those are independent of how targeting happens.
+
+### Sensitive Questions Are Never Auto-Answered
+
+Demographic/EEO questions (race, gender, veteran status, disability, and similar) and legal attestations are **never** answered by the agent. The mapper is instructed to skip them, and a deterministic keyword guard in `dom_fill/mapper.py` overrides the model if it tries anyway. They surface in the review UI as "needs your answer."
 
 ### Paradigm Guidelines
 
@@ -565,7 +583,11 @@ args = [
 
 ## Common Pitfalls — Never Do These
 
-❌ **Never** write a CSS selector for clicking a form field — use vision coordinates  
+❌ **Never** hardcode a per-ATS selector map or XPath — serialize the live DOM at runtime, or use vision  
+❌ **Never** auto-answer a demographic/EEO or legal-attestation question — skip it for the user  
+❌ **Never** send a screenshot to the model when the DOM already answers the question — that's ~1,365 tokens per call  
+❌ **Never** add a `cache_control` breakpoint to a prefix below the model's minimum cacheable size — it silently never caches (verify with `usage.cache_read_input_tokens`)  
+❌ **Never** let a run retry after `StuckLoopError` or `RateLimitExceededError` — both burn money for a guaranteed-identical outcome  
 ❌ **Never** call `page.screenshot()` immediately after an action — always `wait_for_timeout(800)` first  
 ❌ **Never** skip the fit score gate — the quality promise depends on it  
 ❌ **Never** pass raw LLM text directly to Playwright — always `parse_action_response()` first  
@@ -581,6 +603,8 @@ args = [
 ✅ **Always** upload screenshots to S3 — local paths are ephemeral  
 ✅ **Always** wait 800ms after every action before the next screenshot  
 ✅ **Always** use Browserbase for production browser sessions — never raw Playwright in prod  
+✅ **Always** record `response.usage` into the run's `UsageTracker` on every Claude call — cost you don't measure you can't manage  
+✅ **Always** treat "field not locatable" as unknown (`None`), not as failure — a false verification failure escalates to the expensive model  
 
 ---
 
@@ -613,15 +637,23 @@ args = [
 
 | Decision | Choice | Reason |
 |---|---|---|
-| Vision model | `claude-opus-4-5` | Best spatial reasoning + instruction following for UI interaction |
-| Tailoring model | `claude-sonnet-4-6` | Faster + cheaper for text generation; vision not needed |
-| Browser infra | Browserbase | Anti-bot, proxy rotation, managed sessions; local Playwright fails LinkedIn |
+| Navigation | DOM-serialized fill first, vision fallback | ~10× cheaper on the common path; vision reserved for pages that need it |
+| Vision model | `claude-sonnet-5` | Strong UI reasoning at $2/$10 vs Opus $5/$25; escalates to `claude-opus-5` on a screen whose fields fail verification |
+| Tailoring model | `claude-sonnet-5` | Quality matters here — this text is the product |
+| Extraction / mapping model | `claude-haiku-4-5` | Structured extraction from text; cheapest tier is sufficient |
+| Tailoring calls | One merged call | Cover letter + bullets share the same profile/JD context; sending it twice was pure waste |
+| Structured outputs | `output_config.format` everywhere | Schema-guaranteed JSON; removes code-fence-stripping fragility |
+| Browser infra | Browserbase (`BROWSER_MODE=local` for dev) | Anti-bot in prod; local Chromium in dev/test consumes no paid session minutes |
 | Queue | Celery + Redis | Proven async execution with retry logic |
-| Screenshot format | PNG | Lossless; Claude reads fine detail in form fields accurately |
+| Screenshot storage | WebP q80, full resolution | Measured ~2.8× smaller than PNG on real ATS screenshots with no downscaling. **Not JPEG** — on flat UI screenshots JPEG encodes *larger* than PNG |
+| Screenshots sent to the model | PNG, only on the vision tier | Model input stays lossless; storage compression is a separate concern |
 | Viewport | 1280×800 | Standard laptop; ATS forms designed for this size |
-| Max steps per loop | 30 | Prevents infinite loops; sufficient for any real form |
-| Post-action wait | 800ms | React/Angular SPA re-render cycle; empirically determined |
+| Max rounds per vision loop | 30 | Prevents infinite loops; each round now fills many fields |
+| Per-run token budget | 150K | Hard ceiling — the loop stops into `review` rather than burning past it |
+| Stuck detection | 3 identical screens / 3 identical batches / 2 low-confidence rounds | A dead run costs ~2 calls instead of 30 |
+| Post-action wait | 800ms between rounds, 200ms between actions in a batch | Full re-render only needs to settle before the next screenshot |
 | Fit threshold | 70% default, user-configurable | Eliminates <1% callback rate problem of spray-and-pray tools |
+| Daily cap per platform | 20 per user | Protects users from ATS bot detection — the scarcer resource than API budget |
 
 ---
 

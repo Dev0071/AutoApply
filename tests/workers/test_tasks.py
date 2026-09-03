@@ -53,6 +53,9 @@ ORCHESTRATOR_RESULT = {
     "bullets": ["Built APIs", "Led migration"],
     "steps": [{"step_number": 0, "action": "click", "x": 100, "y": 200}],
     "jd": {"title": "Senior Engineer", "company": "Acme", "raw_jd_text": "...", "keywords": ["python"], "ats_type": "greenhouse"},
+    "tier": "dom",
+    "total_cost_usd": 0.0123,
+    "token_usage": {"total_tokens": 4200, "total_cost_usd": 0.0123, "calls": []},
 }
 
 
@@ -151,11 +154,14 @@ async def test_execute_writes_results_and_sets_review():
          patch("anthropic.AsyncAnthropic"), \
          patch("backend.agents.orchestrator.Orchestrator", mock_orch_cls), \
          patch("backend.services.browser.BrowserService"), \
+         patch("backend.services.cache.CacheService"), \
          patch("backend.services.storage.StorageService"):
         mock_settings.database_url = "postgresql+asyncpg://test"
         mock_settings.anthropic_api_key = "test-key"
         mock_settings.vision_loop_max_steps = 30
         mock_settings.vision_loop_wait_ms = 800
+        mock_settings.max_daily_applications_per_platform = 20
+        mock_settings.cost_alert_usd = 0.50
         result = await _execute(run_id, "https://boards.greenhouse.io/acme/jobs/1")
 
     assert result["fit_score"] == 85.0
@@ -165,3 +171,33 @@ async def test_execute_writes_results_and_sets_review():
     assert run.status == ApplicationStatus.review
     assert run.cover_letter == "Dear Hiring Manager..."
     assert run.bullets == ["Built APIs", "Led migration"]
+    assert run.total_cost_usd == 0.0123
+    assert run.token_usage["total_tokens"] == 4200
+
+
+# ---------------------------------------------------------------------------
+# run_application — non-retryable failure taxonomy
+# ---------------------------------------------------------------------------
+
+def test_run_application_rate_limited_is_not_retried():
+    from backend.agents.exceptions import RateLimitExceededError
+    from backend.workers.tasks import run_application
+
+    with patch("backend.workers.tasks._execute", side_effect=RateLimitExceededError(
+        "Daily cap reached", platform="greenhouse", limit=20
+    )), patch("backend.workers.tasks._mark_failed", new=AsyncMock()) as mark_failed:
+        result = run_application.apply(args=(str(uuid.uuid4()), "https://boards.greenhouse.io/a/jobs/1", {}))
+
+    assert result.result["reason"] == "rate_limited"
+    mark_failed.assert_awaited_once()
+
+
+def test_run_application_stuck_loop_is_not_retried():
+    from backend.agents.exceptions import StuckLoopError
+    from backend.workers.tasks import run_application
+
+    with patch("backend.workers.tasks._execute", side_effect=StuckLoopError("Screen unchanged")), \
+         patch("backend.workers.tasks._mark_failed", new=AsyncMock()):
+        result = run_application.apply(args=(str(uuid.uuid4()), "https://boards.greenhouse.io/a/jobs/1", {}))
+
+    assert result.result["reason"] == "agent_stuck"

@@ -66,5 +66,7 @@ class ApplicationRun(Base):
     steps: Mapped[Optional[List[Dict]]] = mapped_column(JSONB)
     cover_letter: Mapped[Optional[str]] = mapped_column(Text)
     bullets: Mapped[Optional[List[str]]] = mapped_column(ARRAY(Text))
+    total_cost_usd: Mapped[Optional[float]] = mapped_column(Float)
+    token_usage: Mapped[Optional[Dict]] = mapped_column(JSONB)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     submitted_at: Mapped[Optional[datetime]] = mapped_column(DateTime)

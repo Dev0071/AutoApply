@@ -117,6 +117,7 @@ async def get_application(
         steps=run.steps or [],
         cover_letter=run.cover_letter,
         bullets=run.bullets or [],
+        total_cost_usd=run.total_cost_usd,
         created_at=run.created_at.isoformat(),
         submitted_at=run.submitted_at.isoformat() if run.submitted_at else None,
     )
@@ -158,6 +159,7 @@ async def submit_application(
         steps=run.steps or [],
         cover_letter=run.cover_letter,
         bullets=run.bullets or [],
+        total_cost_usd=run.total_cost_usd,
         created_at=run.created_at.isoformat(),
         submitted_at=run.submitted_at.isoformat() if run.submitted_at else None,
     )

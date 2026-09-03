@@ -3,24 +3,34 @@
 import { useState } from "react";
 import { cn } from "@/lib/utils";
 import type { StepLog } from "@/lib/api";
-import { MousePointerClick, Keyboard, ChevronRight, CheckCircle2, XCircle, AlignJustify, ArrowDown } from "lucide-react";
+import { MousePointerClick, Keyboard, ChevronRight, CheckCircle2, XCircle, AlignJustify, ArrowDown, UserPen, CheckSquare } from "lucide-react";
 
 const ACTION_ICON: Record<string, React.ElementType> = {
-  click:  MousePointerClick,
-  type:   Keyboard,
-  select: ChevronRight,
-  scroll: ArrowDown,
-  done:   CheckCircle2,
-  error:  XCircle,
+  click:   MousePointerClick,
+  type:    Keyboard,
+  select:  ChevronRight,
+  scroll:  ArrowDown,
+  check:   CheckSquare,
+  skipped: UserPen,
+  done:    CheckCircle2,
+  error:   XCircle,
 };
 
 const ACTION_COLOR: Record<string, string> = {
-  click:  "text-blue-600 bg-blue-50",
-  type:   "text-indigo-600 bg-indigo-50",
-  select: "text-violet-600 bg-violet-50",
-  scroll: "text-gray-500 bg-gray-50",
-  done:   "text-emerald-600 bg-emerald-50",
-  error:  "text-red-600 bg-red-50",
+  click:   "text-blue-600 bg-blue-50",
+  type:    "text-indigo-600 bg-indigo-50",
+  select:  "text-violet-600 bg-violet-50",
+  scroll:  "text-gray-500 bg-gray-50",
+  check:   "text-teal-600 bg-teal-50",
+  skipped: "text-amber-600 bg-amber-50",
+  done:    "text-emerald-600 bg-emerald-50",
+  error:   "text-red-600 bg-red-50",
+};
+
+const SKIP_REASON_LABEL: Record<string, string> = {
+  sensitive: "Needs your answer — demographic question",
+  needs_user_input: "Needs your input",
+  low_confidence: "Skipped — not confident enough",
 };
 
 function ConfidenceBar({ value }: { value: number }) {
@@ -44,6 +54,9 @@ function StepRow({ step, index, isLast }: { step: StepLog; index: number; isLast
   const Icon = ACTION_ICON[action] ?? AlignJustify;
   const colorCls = ACTION_COLOR[action] ?? "text-gray-500 bg-gray-50";
   const isError = action === "error" || step.success === false;
+  const skipLabel = action === "skipped"
+    ? SKIP_REASON_LABEL[step.reasoning ?? ""] ?? "Skipped"
+    : null;
 
   return (
     <div className="relative">
@@ -85,7 +98,17 @@ function StepRow({ step, index, isLast }: { step: StepLog; index: number; isLast
                 &ldquo;{step.value}&rdquo;
               </span>
             )}
-            {step.confidence !== undefined && (
+            {skipLabel && (
+              <span className="text-xs text-amber-700 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded">
+                {skipLabel}
+              </span>
+            )}
+            {step.verified === false && (
+              <span className="text-xs text-red-600 bg-red-50 border border-red-200 px-1.5 py-0.5 rounded">
+                value not confirmed
+              </span>
+            )}
+            {step.confidence !== undefined && step.confidence !== null && action !== "skipped" && (
               <ConfidenceBar value={step.confidence} />
             )}
             {step.screenshot_url && (
@@ -133,7 +156,7 @@ function StepRow({ step, index, isLast }: { step: StepLog; index: number; isLast
   );
 }
 
-export function StepReplay({ steps }: { steps: StepLog[] }) {
+export function StepReplay({ steps, totalCostUsd }: { steps: StepLog[]; totalCostUsd?: number | null }) {
   if (!steps.length) {
     return (
       <div className="flex flex-col items-center justify-center py-12 text-center">
@@ -146,14 +169,18 @@ export function StepReplay({ steps }: { steps: StepLog[] }) {
     );
   }
 
-  const avgConfidence = steps
-    .filter((s) => s.confidence !== undefined)
-    .reduce((sum, s, _, arr) => sum + (s.confidence ?? 0) / arr.length, 0);
+  const scored = steps.filter((s) => s.confidence !== undefined && s.confidence !== null && s.action !== "skipped");
+  const avgConfidence = scored.length
+    ? scored.reduce((sum, s) => sum + (s.confidence ?? 0), 0) / scored.length
+    : 0;
+  const needsAttention = steps.filter((s) => s.needs_user_input).length;
+  const warning = steps.find((s) => s.warning)?.warning;
+  const tier = steps.find((s) => s.tier)?.tier;
 
   return (
     <div>
       {/* Summary bar */}
-      <div className="flex items-center gap-4 mb-6 pb-4 border-b border-gray-100">
+      <div className="flex items-center gap-4 mb-6 pb-4 border-b border-gray-100 flex-wrap">
         <div>
           <p className="text-xs text-gray-400 uppercase tracking-wide font-medium">Steps</p>
           <p className="text-lg font-semibold text-gray-900">{steps.length}</p>
@@ -170,7 +197,45 @@ export function StepReplay({ steps }: { steps: StepLog[] }) {
             {steps.filter((s) => s.success !== false).length}/{steps.length}
           </p>
         </div>
+        {typeof totalCostUsd === "number" && (
+          <div>
+            <p className="text-xs text-gray-400 uppercase tracking-wide font-medium">Cost</p>
+            <p className="text-lg font-semibold text-gray-900 tabular-nums">
+              ${totalCostUsd.toFixed(3)}
+            </p>
+          </div>
+        )}
+        {tier && (
+          <div>
+            <p className="text-xs text-gray-400 uppercase tracking-wide font-medium">Mode</p>
+            <p className="text-lg font-semibold text-gray-900 capitalize">{tier}</p>
+          </div>
+        )}
       </div>
+
+      {needsAttention > 0 && (
+        <div className="mb-5 flex items-start gap-2.5 rounded-lg bg-amber-50 border border-amber-200 px-3 py-2.5">
+          <UserPen className="h-4 w-4 text-amber-500 shrink-0 mt-0.5" />
+          <p className="text-xs text-amber-800 leading-relaxed">
+            <span className="font-medium">
+              {needsAttention} {needsAttention === 1 ? "field needs" : "fields need"} your answer.
+            </span>{" "}
+            Demographic and legal questions are never answered automatically — fill these in
+            yourself before submitting.
+          </p>
+        </div>
+      )}
+
+      {warning === "token_budget_exceeded" && (
+        <div className="mb-5 flex items-start gap-2.5 rounded-lg bg-amber-50 border border-amber-200 px-3 py-2.5">
+          <AlignJustify className="h-4 w-4 text-amber-500 shrink-0 mt-0.5" />
+          <p className="text-xs text-amber-800 leading-relaxed">
+            <span className="font-medium">Stopped at the cost limit.</span>{" "}
+            The agent hit this run&apos;s budget and stopped early — the steps below are what it
+            completed.
+          </p>
+        </div>
+      )}
 
       {/* Timeline */}
       <div>

@@ -15,22 +15,22 @@ from backend.api.schemas import JobAnalyzeResponse
 # ---------------------------------------------------------------------------
 
 def _make_anthropic_mock(jd_text: str, cover_letter: str, bullets: list[str]) -> MagicMock:
-    """Single mock client that serves JD extraction, cover letter, and bullets."""
+    """Mock client serving JD extraction, then the single merged tailoring call."""
     jd_extraction = json.dumps({
         "title": "Senior Engineer",
         "company": "Acme",
         "keywords": ["python", "fastapi"],
     })
-    cl_block = MagicMock(); cl_block.text = cover_letter
-    b_block = MagicMock(); b_block.text = json.dumps(bullets)
-    jd_block = MagicMock(); jd_block.text = jd_extraction
+    tailoring = json.dumps({"cover_letter": cover_letter, "bullets": bullets})
 
-    cl_msg = MagicMock(); cl_msg.content = [cl_block]
-    b_msg = MagicMock(); b_msg.content = [b_block]
+    jd_block = MagicMock(); jd_block.text = jd_extraction
+    t_block = MagicMock(); t_block.text = tailoring
+
     jd_msg = MagicMock(); jd_msg.content = [jd_block]
+    t_msg = MagicMock(); t_msg.content = [t_block]
 
     client = MagicMock()
-    client.messages.create = AsyncMock(side_effect=[jd_msg, cl_msg, b_msg])
+    client.messages.create = AsyncMock(side_effect=[jd_msg, t_msg])
     return client
 
 
@@ -45,10 +45,14 @@ _PROFILE_BODY = {
     "fit_threshold": 70,
 }
 
+# Body text must clear the JD miner's 200-char minimum-content guard.
 _JOB_HTML = (
     "<html><body>"
     "<h1>Senior Engineer at Acme</h1>"
-    "<p>We need Python and FastAPI developers.</p>"
+    "<p>We need Python and FastAPI developers to build and operate resilient "
+    "high-throughput backend services. You will design REST APIs, evolve our "
+    "PostgreSQL schemas, ship containerized deployments, and collaborate with "
+    "product engineering on roadmap delivery across the entire stack.</p>"
     "</body></html>"
 )
 
@@ -87,8 +91,9 @@ async def test_analyze_job_passes_threshold():
         mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_http)
         mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
 
-        from backend.api.dependencies import get_anthropic
+        from backend.api.dependencies import get_anthropic, get_cache
         app.dependency_overrides[get_anthropic] = lambda: anthropic_mock
+        app.dependency_overrides[get_cache] = lambda: None  # no Redis in tests
 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
             r = await c.post("/jobs/analyze", json={
@@ -127,8 +132,9 @@ async def test_analyze_job_fails_threshold_skips_tailoring():
         mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_http)
         mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
 
-        from backend.api.dependencies import get_anthropic
+        from backend.api.dependencies import get_anthropic, get_cache
         app.dependency_overrides[get_anthropic] = lambda: anthropic_mock
+        app.dependency_overrides[get_cache] = lambda: None  # no Redis in tests
 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
             r = await c.post("/jobs/analyze", json={
@@ -163,8 +169,9 @@ async def test_analyze_job_returns_422_on_fetch_failure():
         mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_http)
         mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
 
-        from backend.api.dependencies import get_anthropic
+        from backend.api.dependencies import get_anthropic, get_cache
         app.dependency_overrides[get_anthropic] = lambda: anthropic_mock
+        app.dependency_overrides[get_cache] = lambda: None  # no Redis in tests
 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
             r = await c.post("/jobs/analyze", json={
