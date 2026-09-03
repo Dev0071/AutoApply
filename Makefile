@@ -46,6 +46,9 @@ ui-install:                   ## Install frontend dependencies
 
 # ── Ops ───────────────────────────────────────────────────────────────────────
 
+check-anthropic:              ## Verify the Anthropic key + workspace id work (1 token)
+	$(VENV)/python -m scripts.check_anthropic
+
 s3-lifecycle:                 ## Apply screenshot retention policy to the S3 bucket
 	$(VENV)/python -c "from backend.services.storage import StorageService; StorageService().apply_lifecycle_policy()"
 
@@ -65,4 +68,4 @@ test-all:                     ## Run unit + integration
 help:
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' Makefile | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2}'
 
-.PHONY: infra infra-stop migrate migrate-down db-reset db api worker ui ui-install s3-lifecycle test test-integration test-all help
+.PHONY: check-anthropic infra infra-stop migrate migrate-down db-reset db api worker ui ui-install s3-lifecycle test test-integration test-all help

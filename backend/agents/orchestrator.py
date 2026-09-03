@@ -36,7 +36,9 @@ class Orchestrator:
         self.client = anthropic_client
         self.storage = storage
         self.tracker = UsageTracker()
-        self.jd_miner = JDMiner(anthropic_client, cache=cache, tracker=self.tracker)
+        self.jd_miner = JDMiner(
+            anthropic_client, cache=cache, tracker=self.tracker, browser=browser
+        )
         self.tailoring = TailoringEngine(anthropic_client, tracker=self.tracker)
         self.vision_loop = VisionActionLoop(
             anthropic_client, storage,

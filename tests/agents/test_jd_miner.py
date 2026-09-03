@@ -291,6 +291,132 @@ async def test_fetch_thin_page_raises_jdfetch_error():
             await miner.fetch("https://example.com/job")
 
 
+# ---------------------------------------------------------------------------
+# Browser fallback for SPA / bot-blocked posting pages
+# ---------------------------------------------------------------------------
+
+_RENDERED_HTML = (
+    "<html><body><h1>Senior Python Engineer at Acme Corp</h1><p>"
+    + "We need Python and FastAPI developers with PostgreSQL experience. " * 8
+    + "</p></body></html>"
+)
+
+
+def _make_browser(html: str) -> MagicMock:
+    from contextlib import asynccontextmanager
+
+    page = MagicMock()
+    page.goto = AsyncMock()
+    page.wait_for_timeout = AsyncMock()
+    page.content = AsyncMock(return_value=html)
+
+    browser = MagicMock()
+
+    @asynccontextmanager
+    async def new_page():
+        yield page
+
+    browser.new_page = new_page
+    browser.page = page
+    return browser
+
+
+@pytest.mark.asyncio
+async def test_thin_http_response_falls_back_to_browser():
+    """An SPA board (Ashby) returns ~56 chars over plain HTTP; rendering it
+    in the browser we already own recovers the JD."""
+    browser = _make_browser(_RENDERED_HTML)
+    with patch("httpx.AsyncClient") as mock_cls:
+        _patch_http(mock_cls, html="<html><body>loading…</body></html>")
+        miner = JDMiner(
+            anthropic_client=_make_anthropic_mock(_CLAUDE_EXTRACTION), browser=browser
+        )
+        result = await miner.fetch("https://jobs.ashbyhq.com/acme/1a2b3c")
+
+    assert result.title == "Senior Python Engineer"
+    browser.page.goto.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_403_falls_back_to_browser():
+    """Career sites that 403 a bare HTTP client render fine in a real browser."""
+    import httpx
+
+    browser = _make_browser(_RENDERED_HTML)
+    with patch("httpx.AsyncClient") as mock_cls:
+        mock_http = AsyncMock()
+        mock_response = MagicMock()
+        err = MagicMock(); err.status_code = 403
+        mock_response.raise_for_status.side_effect = httpx.HTTPStatusError(
+            "403", request=MagicMock(), response=err
+        )
+        mock_http.get = AsyncMock(return_value=mock_response)
+        mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_http)
+        mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+
+        miner = JDMiner(
+            anthropic_client=_make_anthropic_mock(_CLAUDE_EXTRACTION), browser=browser
+        )
+        result = await miner.fetch("https://careers.leidos.com/jobs/17658008-qa-lead")
+
+    assert result.title == "Senior Python Engineer"
+
+
+@pytest.mark.asyncio
+async def test_good_http_response_never_opens_a_browser():
+    """Greenhouse postings work over plain HTTP — the browser session (and its
+    cost) must not be spent on the common path."""
+    browser = _make_browser(_RENDERED_HTML)
+    with patch("httpx.AsyncClient") as mock_cls:
+        _patch_http(mock_cls)
+        miner = JDMiner(
+            anthropic_client=_make_anthropic_mock(_CLAUDE_EXTRACTION), browser=browser
+        )
+        await miner.fetch("https://boards.greenhouse.io/acme/jobs/1")
+
+    browser.page.goto.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_listing_url_never_opens_a_browser():
+    """A search page has no JD to render — don't spend a session discovering that."""
+    browser = _make_browser(_RENDERED_HTML)
+    miner = JDMiner(anthropic_client=_make_anthropic_mock(_CLAUDE_EXTRACTION), browser=browser)
+
+    with pytest.raises(JDFetchError, match="search or listing page"):
+        await miner.fetch("https://my.greenhouse.io/jobs/search?query=QA")
+
+    browser.page.goto.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_browser_render_still_thin_raises_clear_error():
+    browser = _make_browser("<html><body>Please sign in</body></html>")
+    with patch("httpx.AsyncClient") as mock_cls:
+        _patch_http(mock_cls, html="<html><body>tiny</body></html>")
+        miner = JDMiner(
+            anthropic_client=_make_anthropic_mock(_CLAUDE_EXTRACTION), browser=browser
+        )
+        with pytest.raises(JDFetchError, match="even after rendering in a browser"):
+            await miner.fetch("https://jobs.ashbyhq.com/acme/1a2b3c")
+
+
+@pytest.mark.asyncio
+async def test_browser_crash_surfaces_original_http_error():
+    """If the browser itself fails, the user sees the actionable HTTP-level
+    message, not an internal Playwright error."""
+    browser = MagicMock()
+    browser.new_page = MagicMock(side_effect=RuntimeError("browser session died"))
+
+    with patch("httpx.AsyncClient") as mock_cls:
+        _patch_http(mock_cls, html="<html><body>tiny</body></html>")
+        miner = JDMiner(
+            anthropic_client=_make_anthropic_mock(_CLAUDE_EXTRACTION), browser=browser
+        )
+        with pytest.raises(JDFetchError, match="too little text"):
+            await miner.fetch("https://jobs.ashbyhq.com/acme/1a2b3c")
+
+
 @pytest.mark.asyncio
 async def test_fetch_invalid_claude_json_degrades_gracefully():
     """Non-JSON extraction returns an empty structure; the fit scorer then

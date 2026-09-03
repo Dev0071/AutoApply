@@ -3,6 +3,10 @@ from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
     anthropic_api_key: str
+    # Required when the API key is identity-linked (the API rejects such
+    # requests with a 400 unless the workspace is named). Leave blank for a
+    # plain org API key.
+    anthropic_workspace_id: str = ""
     browserbase_api_key: str
     database_url: str
     redis_url: str
@@ -27,6 +31,8 @@ class Settings(BaseSettings):
     # Ops guardrails
     browser_mode: str = "browserbase"  # "browserbase" | "local"
     jd_cache_ttl_seconds: int = 86_400
+    # Settle time for SPA job boards (Ashby et al.) after DOM content loads
+    jd_render_wait_ms: int = 2_000
     max_daily_applications_per_platform: int = 20
     cost_alert_usd: float = 0.50
     screenshot_retention_days: int = 30

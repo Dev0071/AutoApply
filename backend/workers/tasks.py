@@ -5,6 +5,7 @@ import uuid
 from datetime import datetime
 from typing import Any, Dict
 
+import anthropic
 import structlog
 from celery import Celery
 
@@ -43,6 +44,18 @@ def run_application(self, run_id: str, job_url: str, profile: Dict[str, Any]) ->
         log.warning("agent_stuck", run_id=run_id, error=str(exc))
         asyncio.run(_mark_failed(run_id, f"agent_stuck: {exc}"))
         return {"status": "failed", "reason": "agent_stuck"}
+    except (
+        anthropic.BadRequestError,
+        anthropic.AuthenticationError,
+        anthropic.PermissionDeniedError,
+        anthropic.NotFoundError,
+    ) as exc:
+        # 4xx from the API is a configuration problem (bad key, missing
+        # workspace id, unknown model). Retrying re-runs the whole pipeline —
+        # including the JD fetch — for a guaranteed-identical failure.
+        log.error("anthropic_request_rejected", run_id=run_id, error=str(exc))
+        asyncio.run(_mark_failed(run_id, f"anthropic_config_error: {exc}"))
+        return {"status": "failed", "reason": "anthropic_config_error"}
     except Exception as exc:
         log.error("task_failed", run_id=run_id, retries=self.request.retries, error=str(exc))
         if self.request.retries >= self.max_retries:
@@ -63,12 +76,16 @@ async def _execute(run_id: str, job_url: str) -> Dict[str, Any]:
     from backend.agents.jd_miner import detect_ats_type
     from backend.agents.orchestrator import Orchestrator
     from backend.db.models import ApplicationRun, ApplicationStatus, JobRecord, UserProfile
+    from backend.services.anthropic_client import build_anthropic_client
     from backend.services.browser import BrowserService
     from backend.services.cache import CacheService
     from backend.services.storage import StorageService
 
     engine = create_async_engine(settings.database_url)
     SessionLocal = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    # asyncio.run() closes the loop on exit; any HTTP client still holding a
+    # socket then raises "Event loop is closed" from its finalizer.
+    clients_to_close: list = []
 
     try:
         async with SessionLocal() as db:
@@ -88,6 +105,7 @@ async def _execute(run_id: str, job_url: str) -> Dict[str, Any]:
             await db.commit()
 
         cache = CacheService()
+        clients_to_close.append(cache)
 
         # Per-platform daily cap — protects users from ATS bot detection/blocks
         platform = detect_ats_type(job_url)
@@ -104,7 +122,8 @@ async def _execute(run_id: str, job_url: str) -> Dict[str, Any]:
                 limit=settings.max_daily_applications_per_platform,
             )
 
-        client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+        client = build_anthropic_client()
+        clients_to_close.append(client)
         storage = StorageService()
         browser = BrowserService()
         orchestrator = Orchestrator(client, storage, browser, cache=cache)
@@ -195,6 +214,11 @@ async def _execute(run_id: str, job_url: str) -> Dict[str, Any]:
         return result_data
 
     finally:
+        for client in clients_to_close:
+            try:
+                await client.close()
+            except Exception as exc:  # never mask the real outcome
+                log.debug("anthropic_client_close_failed", error=str(exc))
         await engine.dispose()
 
 

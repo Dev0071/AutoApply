@@ -13,7 +13,9 @@ async def get_db() -> AsyncSession:
 
 
 async def get_anthropic() -> anthropic.AsyncAnthropic:
-    return anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+    from backend.services.anthropic_client import build_anthropic_client
+
+    return build_anthropic_client()
 
 
 async def get_cache():

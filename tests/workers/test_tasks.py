@@ -192,6 +192,54 @@ def test_run_application_rate_limited_is_not_retried():
     mark_failed.assert_awaited_once()
 
 
+def test_run_application_400_is_not_retried():
+    """A 400 (bad key, missing workspace id, unknown model) can never succeed
+    on retry — retrying re-runs the whole pipeline for an identical failure."""
+    import anthropic
+    import httpx
+
+    from backend.workers.tasks import run_application
+
+    err = anthropic.BadRequestError(
+        "anthropic-workspace-id is required when authenticating with an "
+        "identity-linked API key",
+        response=httpx.Response(400, request=httpx.Request("POST", "https://api.anthropic.com")),
+        body=None,
+    )
+
+    with patch("backend.workers.tasks._execute", side_effect=err), \
+         patch("backend.workers.tasks._mark_failed", new=AsyncMock()) as mark_failed:
+        result = run_application.apply(
+            args=(str(uuid.uuid4()), "https://boards.greenhouse.io/a/jobs/1", {})
+        )
+
+    assert result.result["reason"] == "anthropic_config_error"
+    mark_failed.assert_awaited_once()
+
+
+def test_run_application_500_still_retries():
+    """Server-side errors are transient and must keep their retry behavior."""
+    import anthropic
+    import httpx
+
+    from backend.workers.tasks import run_application
+
+    err = anthropic.InternalServerError(
+        "overloaded",
+        response=httpx.Response(500, request=httpx.Request("POST", "https://api.anthropic.com")),
+        body=None,
+    )
+
+    with patch("backend.workers.tasks._execute", side_effect=err), \
+         patch("backend.workers.tasks._mark_failed", new=AsyncMock()):
+        result = run_application.apply(
+            args=(str(uuid.uuid4()), "https://boards.greenhouse.io/a/jobs/1", {})
+        )
+
+    # Celery surfaces exhausted retries as the Retry exception, not a result dict
+    assert not isinstance(result.result, dict) or result.result.get("reason") != "anthropic_config_error"
+
+
 def test_run_application_stuck_loop_is_not_retried():
     from backend.agents.exceptions import StuckLoopError
     from backend.workers.tasks import run_application

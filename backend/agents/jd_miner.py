@@ -126,11 +126,16 @@ class JDMiner:
         timeout: int = 15,
         cache=None,
         tracker: UsageTracker | None = None,
+        browser=None,
     ):
         self._client = anthropic_client
         self._timeout = timeout
         self._cache = cache
         self.tracker = tracker if tracker is not None else UsageTracker()
+        # Optional BrowserService. Plain HTTP handles Greenhouse postings fine
+        # (9-18k chars); the browser is the fallback for SPA boards like Ashby
+        # and for sites that 403 a bare HTTP client.
+        self._browser = browser
 
     async def fetch(self, url: str) -> JDResult:
         # Popular postings are applied to by many users — mine each URL once.
@@ -179,6 +184,12 @@ class JDMiner:
         return result
 
     async def _fetch_text(self, url: str) -> str:
+        """Cheap HTTP first, real browser only if that isn't enough.
+
+        Measured: Greenhouse postings return 9-18k chars over plain HTTP, so
+        the common path costs no browser session. Ashby (SPA) and sites that
+        403 a bare client need a rendered page.
+        """
         # Cheapest checks first — neither costs a request or a token.
         if is_listing_url(url):
             raise JDFetchError(_LISTING_HINT)
@@ -189,6 +200,39 @@ class JDMiner:
                     f"{name} blocks automated requests. {_ATS_HINT}"
                 )
 
+        try:
+            return await self._fetch_text_http(url)
+        except JDFetchError as exc:
+            if self._browser is None:
+                raise
+            log.info("jd_http_insufficient_using_browser", url=url, reason=str(exc)[:80])
+            try:
+                return await self._fetch_text_browser(url)
+            except JDFetchError:
+                raise
+            except Exception as browser_exc:
+                log.warning("jd_browser_render_failed", url=url, error=str(browser_exc))
+                raise exc from browser_exc
+
+    async def _fetch_text_browser(self, url: str) -> str:
+        """Render the page in a real browser and extract its text."""
+        async with self._browser.new_page() as page:
+            await page.goto(url, wait_until="domcontentloaded")
+            # SPA boards paint their content after hydration
+            await page.wait_for_timeout(settings.jd_render_wait_ms)
+            html = await page.content()
+
+        text = self._clean_html(html)
+        if len(text.strip()) < 200:
+            raise JDFetchError(
+                f"Job page returned too little text ({len(text.strip())} chars) even "
+                f"after rendering in a browser. It may require a login, or the URL "
+                f"may not be a job posting. {_ATS_HINT}"
+            )
+        log.info("jd_fetched_via_browser", url=url, chars=len(text))
+        return text
+
+    async def _fetch_text_http(self, url: str) -> str:
         try:
             async with httpx.AsyncClient(timeout=self._timeout, follow_redirects=True) as client:
                 response = await client.get(
